@@ -20,7 +20,19 @@ public class BaseAttrInfo implements Serializable {
     private String catalog3Id;
     @Transient
     private List<BaseAttrValue> attrValueList;
-
+    @Transient
+    private List<SpuSaleAttr> spuSaleAttrList;
 
 }
+
+
+
+
+
+
+
+
+
+
+
 
