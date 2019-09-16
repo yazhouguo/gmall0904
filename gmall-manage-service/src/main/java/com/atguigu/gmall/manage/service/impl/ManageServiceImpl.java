@@ -1,6 +1,7 @@
 package com.atguigu.gmall.manage.service.impl;
 
 import com.alibaba.dubbo.config.annotation.Service;
+import com.alibaba.fastjson.JSON;
 import com.atguigu.gmall.bean.*;
 import com.atguigu.gmall.manage.mapper.*;
 import com.atguigu.gmall.service.ManageService;
@@ -230,6 +231,12 @@ public class ManageServiceImpl implements ManageService {
 
 
     public SkuInfo getSkuInfoDB(String skuId) {
+        System.err.println(Thread.currentThread()+"读取数据库!!!");
+        try {
+            Thread.sleep(3000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
 
         SkuInfo skuInfo = skuInfoMapper.selectByPrimaryKey(skuId);
         SkuImage skuImage = new SkuImage();
@@ -244,20 +251,29 @@ public class ManageServiceImpl implements ManageService {
     }
     @Override
     public SkuInfo getSkuInfo(String skuId) {
+
+        SkuInfo skuInfoResult = null;
         //1.先查Redis没有再查数据库
         Jedis jedis = redisUtil.getJedis();
-        int SKU_EXPIRE_SEC=3;
+        int SKU_EXPIRE_SEC=100;
         //redis的结构:1 type  2 key   sku:101:info   3 value   skuInfoJson
         String skuKey=SKUKEY_PREFIX+skuId+SKUKEY_INFO_SUFFIX;
         String skuInfoJson = jedis.get(skuKey);
         if(skuInfoJson!=null){
             System.out.println(Thread.currentThread()+"命中缓存!!!");
+            skuInfoResult = JSON.parseObject(skuInfoJson, SkuInfo.class);
 
+        }else {
+            System.out.println(Thread.currentThread()+"未命中!!!");
+            skuInfoResult = getSkuInfoDB(skuId);
+            System.out.println(Thread.currentThread()+"写入缓存!!");
+            String skuInfoJsonResult = JSON.toJSONString(skuInfoResult);
+            jedis.setex(skuKey,SKU_EXPIRE_SEC,skuInfoJsonResult);
         }
 
 
         jedis.close();
-        return null;
+        return skuInfoResult;
     }
 
     @Override
