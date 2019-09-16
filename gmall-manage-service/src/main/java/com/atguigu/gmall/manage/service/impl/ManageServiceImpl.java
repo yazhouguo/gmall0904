@@ -62,6 +62,10 @@ public class ManageServiceImpl implements ManageService {
     @Autowired
     BaseCatalog3Mapper baseCatalog3Mapper;
 
+    public static final String SKUKEY_PREFIX="sku:";
+    public static final String SKUKEY_INFO_SUFFIX=":info";
+
+
     @Override
     public List<BaseCatalog1> getCatalog1() {
         return baseCatalog1Mapper.selectAll();
@@ -224,11 +228,9 @@ public class ManageServiceImpl implements ManageService {
 
     }
 
-    @Override
-    public SkuInfo getSkuInfo(String skuId) {
-        Jedis jedis = redisUtil.getJedis();
-        jedis.set("k1","v1");
-        jedis.close();
+
+    public SkuInfo getSkuInfoDB(String skuId) {
+
         SkuInfo skuInfo = skuInfoMapper.selectByPrimaryKey(skuId);
         SkuImage skuImage = new SkuImage();
         skuImage.setSkuId(skuId);
@@ -239,6 +241,23 @@ public class ManageServiceImpl implements ManageService {
         List<SkuSaleAttrValue> skuSaleAttrValueList = skuSaleAttrValueMapper.select(skuSaleAttrValue);
         skuInfo.setSkuSaleAttrValueList(skuSaleAttrValueList);
         return skuInfo;
+    }
+    @Override
+    public SkuInfo getSkuInfo(String skuId) {
+        //1.先查Redis没有再查数据库
+        Jedis jedis = redisUtil.getJedis();
+        int SKU_EXPIRE_SEC=3;
+        //redis的结构:1 type  2 key   sku:101:info   3 value   skuInfoJson
+        String skuKey=SKUKEY_PREFIX+skuId+SKUKEY_INFO_SUFFIX;
+        String skuInfoJson = jedis.get(skuKey);
+        if(skuInfoJson!=null){
+            System.out.println(Thread.currentThread()+"命中缓存!!!");
+
+        }
+
+
+        jedis.close();
+        return null;
     }
 
     @Override
