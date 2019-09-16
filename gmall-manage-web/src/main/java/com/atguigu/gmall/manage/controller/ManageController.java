@@ -33,7 +33,6 @@ public class ManageController {
     @GetMapping("attrInfoList")
     public List<BaseAttrInfo> getBaseAttrInfoList(String catalog3Id){
         List<BaseAttrInfo> attrList = manageService.getAttrList(catalog3Id);
-        System.out.println("221423123124214");
         return attrList;
     }
 
@@ -68,6 +67,16 @@ public class ManageController {
     public List<SpuInfo> getSpuList(String catalog3Id){
 
         return manageService.getSpuList(catalog3Id);
+    }
+
+    @GetMapping("spuImageList")
+    public List<SpuImage> getSpuImageList(String spuId){
+        return manageService.getSpuImageList(spuId);
+    }
+
+    @GetMapping("spuSaleAttrList")
+    public List<SpuSaleAttr> getSpuSaleAttrList(String spuId){
+        return manageService.getSpuSaleAttrList(spuId);
     }
 
 

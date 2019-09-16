@@ -4,14 +4,33 @@ import com.alibaba.dubbo.config.annotation.Service;
 import com.atguigu.gmall.bean.*;
 import com.atguigu.gmall.manage.mapper.*;
 import com.atguigu.gmall.service.ManageService;
+import com.atguigu.gmall.util.RedisUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
+import redis.clients.jedis.Jedis;
 import tk.mybatis.mapper.entity.Example;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class ManageServiceImpl implements ManageService {
+
+    @Autowired
+    RedisUtil redisUtil;
+
+    @Autowired
+    SkuAttrValueMapper skuAttrValueMapper;
+
+    @Autowired
+    SkuImageMapper skuImageMapper;
+
+    @Autowired
+    SkuInfoMapper skuInfoMapper;
+
+    @Autowired
+    SkuSaleAttrValueMapper skuSaleAttrValueMapper;
 
     @Autowired
     SpuImageMapper spuImageMapper;
@@ -66,11 +85,20 @@ public class ManageServiceImpl implements ManageService {
 
     @Override
     public List<BaseAttrInfo> getAttrList(String catalog3Id) {
-        Example example = new Example(BaseAttrInfo.class);
-        example.createCriteria().andEqualTo("catalog3Id",catalog3Id);
-        List<BaseAttrInfo> baseAttrInfoList = baseAttrInfoMapper.selectByExample(example);
+//        Example example = new Example(BaseAttrInfo.class);
+//        example.createCriteria().andEqualTo("catalog3Id",catalog3Id);
+//        List<BaseAttrInfo> baseAttrInfoList = baseAttrInfoMapper.selectByExample(example);
+//        //查询平台属性值
+//        for (BaseAttrInfo baseAttrInfo : baseAttrInfoList) {
+//            BaseAttrValue baseAttrValue = new BaseAttrValue();
+//            baseAttrValue.setAttrId(baseAttrInfo.getId());
+//            List<BaseAttrValue> baseAttrValueList = baseAttrValueMapper.select(baseAttrValue);
+//            baseAttrInfo.setAttrValueList(baseAttrValueList);
+//        }
+        List<BaseAttrInfo> baseAttrList = baseAttrInfoMapper.getBaseAttrInfoListByCatalog3Id(catalog3Id);
 
-        return baseAttrInfoList;
+
+        return baseAttrList;
     }
 
     @Override
@@ -143,6 +171,92 @@ public class ManageServiceImpl implements ManageService {
         SpuInfo spuInfo = new SpuInfo();
         spuInfo.setCatalog3Id(catalog3Id);
         return spuInfoMapper.select(spuInfo);
+    }
+
+    @Override
+    public List<SpuImage> getSpuImageList(String spuId) {
+        SpuImage spuImage = new SpuImage();
+        spuImage.setSpuId(spuId);
+        return spuImageMapper.select(spuImage);
+    }
+
+    @Override
+    public List<SpuSaleAttr> getSpuSaleAttrList(String spuId) {
+
+        return spuSaleAttrMapper.getSpuSaleAttrListBySpuId(spuId);
+    }
+
+    @Override
+    public void saveSkuInfo(SkuInfo skuInfo) {
+        //保存  1.基本属性
+        if(skuInfo.getId()==null || skuInfo.getId().length()==0) {
+            skuInfoMapper.insertSelective(skuInfo);
+        }else {
+            skuInfoMapper.updateByPrimaryKeySelective(skuInfo);
+        }
+        //2.平台属性
+        SkuAttrValue skuAttrValue = new SkuAttrValue();
+        skuAttrValue.setSkuId(skuInfo.getId());
+        skuAttrValueMapper.delete(skuAttrValue);
+        List<SkuAttrValue> skuAttrValueList = skuInfo.getSkuAttrValueList();
+        for (SkuAttrValue attrValue : skuAttrValueList) {
+            attrValue.setSkuId(skuInfo.getId());
+            skuAttrValueMapper.insertSelective(attrValue);
+        }
+        //3 销售属性
+        SkuSaleAttrValue skuSaleAttrValue =new SkuSaleAttrValue();
+        skuSaleAttrValue.setSkuId(skuInfo.getId());
+        skuSaleAttrValueMapper.delete(skuSaleAttrValue);
+        List<SkuSaleAttrValue> skuSaleAttrValueList = skuInfo.getSkuSaleAttrValueList();
+        for (SkuSaleAttrValue saleAttrValue : skuSaleAttrValueList) {
+            saleAttrValue.setSkuId(skuInfo.getId());
+            skuSaleAttrValueMapper.insertSelective(saleAttrValue);
+
+        }
+        //4 图片
+        SkuImage skuImage4Del =new SkuImage();
+        skuImage4Del.setId(skuInfo.getId());
+        skuImageMapper.delete(skuImage4Del);
+        for (SkuImage skuImage : skuInfo.getSkuImageList()) {
+            skuImage.setSkuId(skuInfo.getId());
+            skuImageMapper.insertSelective(skuImage);
+        }
+
+    }
+
+    @Override
+    public SkuInfo getSkuInfo(String skuId) {
+        Jedis jedis = redisUtil.getJedis();
+        jedis.set("k1","v1");
+        jedis.close();
+        SkuInfo skuInfo = skuInfoMapper.selectByPrimaryKey(skuId);
+        SkuImage skuImage = new SkuImage();
+        skuImage.setSkuId(skuId);
+        List<SkuImage> skuImageList = skuImageMapper.select(skuImage);
+        skuInfo.setSkuImageList(skuImageList);
+        SkuSaleAttrValue skuSaleAttrValue = new SkuSaleAttrValue();
+        skuSaleAttrValue.setSkuId(skuId);
+        List<SkuSaleAttrValue> skuSaleAttrValueList = skuSaleAttrValueMapper.select(skuSaleAttrValue);
+        skuInfo.setSkuSaleAttrValueList(skuSaleAttrValueList);
+        return skuInfo;
+    }
+
+    @Override
+    public List<SpuSaleAttr> getSpuSaleAttrListCheckSku(String skuId, String spuId) {
+        List<SpuSaleAttr> spuSaleAttrList = spuSaleAttrMapper.getSpuSaleAttrListBySpuIdCheckSku(skuId, spuId);
+        return spuSaleAttrList;
+    }
+
+    @Override
+    public Map getSkuValueIdsMap(String spuId) {
+        List<Map> mapList = skuSaleAttrValueMapper.getSaleAttrValuesBySpu(spuId);
+        Map skuValueIdsMap = new HashMap();
+        for (Map map : mapList) {
+            String skuId = (Long)map.get("sku_id")+"";
+            String valueIds = (String)map.get("value_ids");
+            skuValueIdsMap.put(valueIds,skuId);
+        }
+        return skuValueIdsMap;
     }
 }
 

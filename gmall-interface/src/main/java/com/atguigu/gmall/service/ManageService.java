@@ -3,6 +3,7 @@ package com.atguigu.gmall.service;
 import com.atguigu.gmall.bean.*;
 
 import java.util.List;
+import java.util.Map;
 
 public interface ManageService {
 
@@ -29,7 +30,36 @@ public interface ManageService {
 
     //根据三级分类查询spu列表
     public List<SpuInfo> getSpuList(String catalog3Id);
+
+    //根据spuID查询图片列表
+    public List<SpuImage> getSpuImageList(String spuId);
+
+    public List<SpuSaleAttr> getSpuSaleAttrList(String spuId);
+
+    //保存skuinfo
+    public void saveSkuInfo(SkuInfo skuInfo);
+
+    //查询skuInfo
+    public SkuInfo getSkuInfo(String skuId);
+
+    //根据spuId查询销售属性,选中传人的sku设计的销售属性
+    public List<SpuSaleAttr> getSpuSaleAttrListCheckSku(String skuId,String spuId);
+
+    //根据spuid查询已有的sku涉及销售属性清单
+    public Map getSkuValueIdsMap(String spuId);
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
