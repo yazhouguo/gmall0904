@@ -6,6 +6,10 @@ import com.atguigu.gmall.bean.*;
 import com.atguigu.gmall.manage.mapper.*;
 import com.atguigu.gmall.service.ManageService;
 import com.atguigu.gmall.util.RedisUtil;
+import org.redisson.Redisson;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
+import org.redisson.config.Config;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import redis.clients.jedis.Jedis;
@@ -14,6 +18,8 @@ import tk.mybatis.mapper.entity.Example;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class ManageServiceImpl implements ManageService {
@@ -65,6 +71,7 @@ public class ManageServiceImpl implements ManageService {
 
     public static final String SKUKEY_PREFIX="sku:";
     public static final String SKUKEY_INFO_SUFFIX=":info";
+    public static final String SKUKEY_LOCK_SUFFIX=":lock";
 
 
     @Override
@@ -232,25 +239,35 @@ public class ManageServiceImpl implements ManageService {
 
     public SkuInfo getSkuInfoDB(String skuId) {
         System.err.println(Thread.currentThread()+"读取数据库!!!");
-        try {
-            Thread.sleep(3000);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
+//        try {
+//            Thread.sleep(3000);
+//        } catch (InterruptedException e) {
+//            e.printStackTrace();
+//        }
 
         SkuInfo skuInfo = skuInfoMapper.selectByPrimaryKey(skuId);
+        if(skuInfo==null){
+            return null;
+        }
+
         SkuImage skuImage = new SkuImage();
         skuImage.setSkuId(skuId);
         List<SkuImage> skuImageList = skuImageMapper.select(skuImage);
         skuInfo.setSkuImageList(skuImageList);
+
         SkuSaleAttrValue skuSaleAttrValue = new SkuSaleAttrValue();
         skuSaleAttrValue.setSkuId(skuId);
         List<SkuSaleAttrValue> skuSaleAttrValueList = skuSaleAttrValueMapper.select(skuSaleAttrValue);
         skuInfo.setSkuSaleAttrValueList(skuSaleAttrValueList);
+
+        SkuAttrValue skuAttrValue = new SkuAttrValue();
+        skuAttrValue.setSkuId(skuId);
+        List<SkuAttrValue> skuAttrValueList = skuAttrValueMapper.select(skuAttrValue);
+        skuInfo.setSkuAttrValueList(skuAttrValueList);
         return skuInfo;
     }
-    @Override
-    public SkuInfo getSkuInfo(String skuId) {
+
+    public SkuInfo getSkuInfo_redis(String skuId) {
 
         SkuInfo skuInfoResult = null;
         //1.先查Redis没有再查数据库
@@ -260,19 +277,110 @@ public class ManageServiceImpl implements ManageService {
         String skuKey=SKUKEY_PREFIX+skuId+SKUKEY_INFO_SUFFIX;
         String skuInfoJson = jedis.get(skuKey);
         if(skuInfoJson!=null){
-            System.out.println(Thread.currentThread()+"命中缓存!!!");
-            skuInfoResult = JSON.parseObject(skuInfoJson, SkuInfo.class);
+            if(!"EMPTY".equals(skuInfoJson)){
+                System.out.println(Thread.currentThread()+"命中缓存!!!");
+                skuInfoResult = JSON.parseObject(skuInfoJson, SkuInfo.class);
+            }
+
 
         }else {
-            System.out.println(Thread.currentThread()+"未命中!!!");
-            skuInfoResult = getSkuInfoDB(skuId);
-            System.out.println(Thread.currentThread()+"写入缓存!!");
-            String skuInfoJsonResult = JSON.toJSONString(skuInfoResult);
-            jedis.setex(skuKey,SKU_EXPIRE_SEC,skuInfoJsonResult);
+            System.out.println(Thread.currentThread()+"未命中!!");
+            //setnx     1  查锁   exists 2 抢锁  set
+            //定义一下 锁的结构   type  string     key  sku:101:lock      value  locked
+            String lockKey=SKUKEY_PREFIX+skuId+SKUKEY_LOCK_SUFFIX;
+//            Long locked = jedis.setnx(lockKey, "locked");
+//            jedis.expire(lockKey,10);
+            String token= UUID.randomUUID().toString();
+            String locked = jedis.set(lockKey, token, "NX", "EX", 10);
+            if ("OK".equals(locked)){
+                System.out.println(Thread.currentThread()+"得到锁!!!");
+                skuInfoResult = getSkuInfoDB(skuId);
+                System.out.println(Thread.currentThread()+"写入缓存!!");
+                String skuInfoJsonResult = null;
+                if(skuInfoResult!=null){
+                    skuInfoJsonResult = JSON.toJSONString(skuInfoResult);
+                }else {
+                    skuInfoJsonResult="EMPTY";
+                }
+                jedis.setex(skuKey,SKU_EXPIRE_SEC,skuInfoJsonResult);
+                System.out.println(Thread.currentThread()+"释放锁!!"+lockKey);
+                if(jedis.exists(lockKey) && token.equals(jedis.get(lockKey))){
+                    jedis.del(lockKey);
+                }
+
+            }else {
+                System.out.println(Thread.currentThread()+"未得到锁,开始自旋等待!!");
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                getSkuInfo(skuId);
+            }
+
+
         }
 
 
         jedis.close();
+        return skuInfoResult;
+    }
+
+
+    @Override
+    public SkuInfo getSkuInfo(String skuId) {
+        SkuInfo skuInfoResult=null;
+        //1  先查redis  没有再查数据库
+        Jedis jedis = redisUtil.getJedis();
+        int SKU_EXPIRE_SEC=100;
+        // redis结构 ： 1 type  string  2 key   sku:101:info  3 value  skuInfoJson
+        String skuKey=SKUKEY_PREFIX+skuId+SKUKEY_INFO_SUFFIX;
+        String skuInfoJson = jedis.get(skuKey);
+        if(skuInfoJson!=null){
+            if(!"EMPTY".equals(skuInfoJson)){
+                System.out.println(Thread.currentThread()+"命中缓存！！");
+                skuInfoResult = JSON.parseObject(skuInfoJson, SkuInfo.class);
+            }
+        }else{
+            Config config = new Config();
+            config.useSingleServer().setAddress("redis://redis.gmall.com:6379");
+            RedissonClient redissonClient = Redisson.create(config);
+            String lockKey=SKUKEY_PREFIX+skuId+SKUKEY_LOCK_SUFFIX;
+            RLock lock = redissonClient.getLock(lockKey);
+            // lock.lock(10,TimeUnit.SECONDS);
+            boolean locked=false ;
+            try {
+                locked = lock.tryLock(10, 5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            if(locked) {
+                System.out.println(Thread.currentThread() + "得到锁！！");
+                // 如果得到锁后能够在缓存中查询 ，那么直接使用缓存数据 不用在查询数据库
+                System.out.println(Thread.currentThread()+"再次查询缓存！！");
+                String skuInfoJsonResult = jedis.get(skuKey);
+                if (skuInfoJsonResult != null) {
+                    if (!"EMPTY".equals(skuInfoJsonResult)) {
+                        System.out.println(Thread.currentThread() + "命中缓存！！");
+                        skuInfoResult = JSON.parseObject(skuInfoJsonResult, SkuInfo.class);
+                    }
+
+                } else {
+                    skuInfoResult = getSkuInfoDB(skuId);
+
+                    System.out.println(Thread.currentThread() + "写入缓存！！");
+
+                    if (skuInfoResult != null) {
+                        skuInfoJsonResult = JSON.toJSONString(skuInfoResult);
+                    } else {
+                        skuInfoJsonResult = "EMPTY";
+                    }
+                    jedis.setex(skuKey, SKU_EXPIRE_SEC, skuInfoJsonResult);
+                }
+                lock.unlock();
+            }
+
+        }
         return skuInfoResult;
     }
 
