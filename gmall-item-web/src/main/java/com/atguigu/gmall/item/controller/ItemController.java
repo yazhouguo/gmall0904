@@ -4,6 +4,8 @@ import com.alibaba.dubbo.config.annotation.Reference;
 import com.alibaba.fastjson.JSON;
 import com.atguigu.gmall.bean.SkuInfo;
 import com.atguigu.gmall.bean.SpuSaleAttr;
+import com.atguigu.gmall.config.LoginRequire;
+import com.atguigu.gmall.service.ListService;
 import com.atguigu.gmall.service.ManageService;
 
 import org.springframework.stereotype.Controller;
@@ -18,6 +20,9 @@ import java.util.Map;
 @Controller
 public class ItemController {
 
+   // @Reference
+    //ListService listService;
+
     @Reference
     ManageService manageService;
 
@@ -31,6 +36,9 @@ public class ItemController {
         Map skuValueIdsMap = manageService.getSkuValueIdsMap(skuInfo.getSpuId());
         String valuesSkuJson = JSON.toJSONString(skuValueIdsMap);
         request.setAttribute("valuesSkuJson",valuesSkuJson);
+
+        //listService.incrHotScore(skuId);
+        request.getAttribute("userId");
         return "item";
     }
 }

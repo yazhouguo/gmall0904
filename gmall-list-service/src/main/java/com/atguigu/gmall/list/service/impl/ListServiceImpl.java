@@ -1,19 +1,19 @@
 package com.atguigu.gmall.list.service.impl;
 
 import com.alibaba.dubbo.config.annotation.Service;
-import com.atguigu.gmall.bean.SkuInfo;
 import com.atguigu.gmall.bean.SkuLsInfo;
 import com.atguigu.gmall.bean.SkuLsParams;
 import com.atguigu.gmall.bean.SkuLsResult;
 import com.atguigu.gmall.service.ListService;
+import com.atguigu.gmall.util.RedisUtil;
 import io.searchbox.client.JestClient;
 import io.searchbox.core.Index;
 import io.searchbox.core.Search;
 import io.searchbox.core.SearchResult;
+import io.searchbox.core.Update;
 import io.searchbox.core.search.aggregation.TermsAggregation;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.MatchQueryBuilder;
-import org.elasticsearch.index.query.RangeQueryBuilder;
 import org.elasticsearch.index.query.TermQueryBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilders;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsBuilder;
@@ -21,6 +21,7 @@ import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.highlight.HighlightBuilder;
 import org.elasticsearch.search.sort.SortOrder;
 import org.springframework.beans.factory.annotation.Autowired;
+import redis.clients.jedis.Jedis;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -28,6 +29,9 @@ import java.util.List;
 
 @Service
 public class ListServiceImpl implements ListService {
+
+    @Autowired
+    RedisUtil redisUtil;
 
     @Autowired
     JestClient jestClient;
@@ -46,7 +50,6 @@ public class ListServiceImpl implements ListService {
 
     @Override
     public SkuLsResult getSkuLsInfoList(SkuLsParams skuLsParams) {
-
         String query="{\n" +
                 "  \"query\": {\n" +
                 "    \"bool\": {\n" +
@@ -94,33 +97,41 @@ public class ListServiceImpl implements ListService {
                 "      }\n" +
                 "    ]\n" +
                 "}";
+
         SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
         BoolQueryBuilder boolQueryBuilder = new BoolQueryBuilder();
-        boolQueryBuilder.must(new MatchQueryBuilder("skuName",skuLsParams.getKeyword()));
-        //三级分类过滤
-        boolQueryBuilder.filter(new TermQueryBuilder("catalog3Id",skuLsParams.getCatalog3Id()));
-        //平台属性过滤
-        String[] valueIds = skuLsParams.getValueId();
-        for (int i = 0; i<valueIds.length;i++){
-            String valueId = valueIds[i];
-            boolQueryBuilder.filter(new TermQueryBuilder("skuAttrValueList.valueId",valueId));
+        //商品名称查询搜索
+        if(skuLsParams.getKeyword()!=null) {
+            boolQueryBuilder.must(new MatchQueryBuilder("skuName", skuLsParams.getKeyword()));
+            //高亮
+            searchSourceBuilder.highlight(new HighlightBuilder().field("skuName").preTags("<span style='color:red'>" ).postTags("</span>"));
+
         }
-        //价格
-        //boolQueryBuilder.filter(new RangeQueryBuilder("price").gte("3200"));
+        //三级分类过滤
+        if(skuLsParams.getCatalog3Id()!=null) {
+            boolQueryBuilder.filter(new TermQueryBuilder("catalog3Id", skuLsParams.getCatalog3Id()));
+        }
+        //平台属性过滤
+        if(skuLsParams.getValueId()!=null&&skuLsParams.getValueId().length>0) {
+            String[] valueIds = skuLsParams.getValueId();
+            for (int i = 0; i < valueIds.length; i++) {
+                String valueid = valueIds[i];
+                boolQueryBuilder.filter(new TermQueryBuilder("skuAttrValueList.valueId", valueid));
+            }
+        }
+        //  价格
+        //    boolQueryBuilder.filter(new RangeQueryBuilder("price").gte("3200"));
 
         searchSourceBuilder.query(boolQueryBuilder);
-
-        //起始行
+        // 起始行
         searchSourceBuilder.from((skuLsParams.getPageNo()-1)*skuLsParams.getPageSize());
+        // 页行数
         searchSourceBuilder.size(skuLsParams.getPageSize());
-        //高亮
-        searchSourceBuilder.highlight(new HighlightBuilder().field("skuName").preTags("<span style='color:red'>" ).postTags("</span>"));
         //聚合
         TermsBuilder aggsBuilder = AggregationBuilders.terms("groupby_value_id").field("skuAttrValueList.valueId").size(1000);
         searchSourceBuilder.aggregation(aggsBuilder);
         //排序
         searchSourceBuilder.sort("hotScore", SortOrder.DESC);
-
 
         System.out.println(searchSourceBuilder.toString());
 
@@ -130,32 +141,67 @@ public class ListServiceImpl implements ListService {
         try {
             SearchResult searchResult = jestClient.execute(search);
 
-            List<SkuLsInfo> skuLsInfoList = new ArrayList<>();
+
+            //商品信息列表
+            List<SkuLsInfo> skuLsInfoList=new ArrayList<>();
             List<SearchResult.Hit<SkuLsInfo, Void>> hits = searchResult.getHits(SkuLsInfo.class);
             for (SearchResult.Hit<SkuLsInfo, Void> hit : hits) {
                 SkuLsInfo skuLsInfo = hit.source;
+                String skuNameHL = hit.highlight.get("skuName").get(0);
+                skuLsInfo.setSkuName(skuNameHL);
                 skuLsInfoList.add(skuLsInfo);
             }
             skuLsResult.setSkuLsInfoList(skuLsInfoList);
             //总数
-            searchResult.getTotal();
-            //总页数
-            long totalPage= (searchResult.getTotal() + skuLsParams.getPageSize() -1) / skuLsParams.getPageSize();
+            Long total = searchResult.getTotal();
+            skuLsResult.setTotal(total);
+            //总页数 =  （总数+ 每页行数 -1） /每页行数
+            long totalPage = (total + skuLsParams.getPageSize() - 1) / skuLsParams.getPageSize();
             skuLsResult.setTotalPages(totalPage);
 
             //聚合部分   商品设计的平台属性
             List<String> attrValueIdList = new ArrayList<>();
             List<TermsAggregation.Entry> buckets = searchResult.getAggregations().getTermsAggregation("groupby_value_id").getBuckets();
             for (TermsAggregation.Entry bucket : buckets) {
-                attrValueIdList.add(bucket.getKey());
+                attrValueIdList.add( bucket.getKey()) ;
             }
             skuLsResult.setAttrValueIdList(attrValueIdList);
+
 
         } catch (IOException e) {
             e.printStackTrace();
         }
 
         return skuLsResult;
+    }
+
+    @Override
+    public void incrHotScore(String skuId) {
+        Jedis jedis = redisUtil.getJedis();
+        //每次执行 在redis中做+1
+        //设计key type string    key  sku:101:hotscore     value  hotscore
+        String hotScoreKey = "sku"+skuId+":hotscore";
+        Long hotScore = jedis.incr(hotScoreKey);
+        //计数可以被10整除时 更新es
+        if(hotScore%10==0){
+            updateHotScoreEs(skuId,hotScore);
+        }
+
+    }
+
+    public void updateHotScoreEs(String skuId,Long hotScore){
+        String updateString="{\n" +
+                "   \"doc\":{\n" +
+                "     \"hotScore\":"+hotScore+"\n" +
+                "   }\n" +
+                "}";
+
+        Update update = new Update.Builder(updateString).index("gmall_sku_info").type("SkuInfo").id(skuId).build();
+        try {
+            jestClient.execute(update);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }
 
